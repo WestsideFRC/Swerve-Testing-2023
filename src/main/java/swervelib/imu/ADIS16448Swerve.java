@@ -34,7 +34,7 @@ public class ADIS16448Swerve extends SwerveIMU
   @Override
   public void factoryDefault()
   {
-    yawOffset = imu.getAngle() % 360;
+    yawOffset = (imu.getAngle() % 360);
   }
 
   /**
@@ -81,4 +81,3 @@ public class ADIS16448Swerve extends SwerveIMU
     return imu;
   }
 }
-

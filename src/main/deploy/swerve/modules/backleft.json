@@ -10,15 +10,15 @@
     "canbus": null
   },
   "encoder": {
-    "type": "thrifty",
+    "type": "analog",
     "id": 2,
     "canbus": null
   },
   "inverted": {
     "drive": false,
-    "angle": true
+    "angle": false
   },
-  "absoluteEncoderOffset": -72.7656,
+  "absoluteEncoderOffset": 251.8,
   "location": {
     "x": -10,
     "y": 10

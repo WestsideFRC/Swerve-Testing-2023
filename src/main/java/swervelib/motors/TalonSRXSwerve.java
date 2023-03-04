@@ -4,12 +4,13 @@ import com.ctre.phoenix.motorcontrol.ControlMode;
 import com.ctre.phoenix.motorcontrol.DemandType;
 import com.ctre.phoenix.motorcontrol.FeedbackDevice;
 import com.ctre.phoenix.motorcontrol.NeutralMode;
-import com.ctre.phoenix.motorcontrol.RemoteFeedbackDevice;
-import com.ctre.phoenix.motorcontrol.SupplyCurrentLimitConfiguration;
+import com.ctre.phoenix.motorcontrol.StatusFrameEnhanced;
+import com.ctre.phoenix.motorcontrol.can.TalonSRXConfiguration;
 import com.ctre.phoenix.motorcontrol.can.WPI_TalonSRX;
-import com.ctre.phoenix.sensors.CANCoder;
 import swervelib.encoders.SwerveAbsoluteEncoder;
 import swervelib.parser.PIDFConfig;
+import swervelib.simulation.ctre.PhysicsSim;
+import swervelib.telemetry.SwerveDriveTelemetry;
 
 /**
  * {@link com.ctre.phoenix.motorcontrol.can.WPI_TalonSRX} Swerve Motor.
@@ -20,19 +21,31 @@ public class TalonSRXSwerve extends SwerveMotor
   /**
    * Factory default already occurred.
    */
-  private final boolean factoryDefaultOccurred = false;
+  private final boolean               factoryDefaultOccurred = false;
+  /**
+   * Current TalonFX configuration.
+   */
+  private final TalonSRXConfiguration configuration          = new TalonSRXConfiguration();
+  /**
+   * Whether the absolute encoder is integrated.
+   */
+  private final boolean               absoluteEncoder        = false;
   /**
    * TalonSRX motor controller.
    */
   WPI_TalonSRX motor;
   /**
-   * Whether the absolute encoder is integrated.
-   */
-  private boolean absoluteEncoder          = false;
-  /**
-   * The position conversion factor.
+   * The position conversion factor to convert raw sensor units to Meters Per 100ms, or Ticks to Degrees.
    */
   private double  positionConversionFactor = 1;
+  /**
+   * If the TalonFX configuration has changed.
+   */
+  private boolean configChanged            = true;
+  /**
+   * Nominal voltage default to use with feedforward.
+   */
+  private double  nominalVoltage           = 12.0;
 
   /**
    * Constructor for TalonSRX swerve motor.
@@ -48,6 +61,11 @@ public class TalonSRXSwerve extends SwerveMotor
 
     factoryDefaults();
     clearStickyFaults();
+
+    if (SwerveDriveTelemetry.isSimulation)
+    {
+      PhysicsSim.getInstance().addTalonSRX(motor, .25, 6800);
+    }
   }
 
   /**
@@ -70,6 +88,7 @@ public class TalonSRXSwerve extends SwerveMotor
     if (!factoryDefaultOccurred)
     {
       motor.configFactoryDefault();
+      motor.setSensorPhase(true);
     }
   }
 
@@ -82,7 +101,6 @@ public class TalonSRXSwerve extends SwerveMotor
     motor.clearStickyFaults();
   }
 
-
   /**
    * Set the absolute encoder to be a compatible absolute encoder.
    *
@@ -91,13 +109,7 @@ public class TalonSRXSwerve extends SwerveMotor
   @Override
   public SwerveMotor setAbsoluteEncoder(SwerveAbsoluteEncoder encoder)
   {
-    if (encoder.getAbsoluteEncoder() instanceof CANCoder)
-    {
-      motor.configSelectedFeedbackSensor(RemoteFeedbackDevice.RemoteSensor0);
-      motor.configRemoteFeedbackFilter((CANCoder) encoder.getAbsoluteEncoder(),
-                                       CTRE_remoteSensor.REMOTE_SENSOR_0.ordinal());
-      absoluteEncoder = true;
-    }
+    // Do not support.
     return this;
   }
 
@@ -105,12 +117,70 @@ public class TalonSRXSwerve extends SwerveMotor
    * Configure the integrated encoder for the swerve module. Sets the conversion factors for position and velocity.
    *
    * @param positionConversionFactor The conversion factor to apply for position.
+   *                                 <p><br>
+   *                                 Degrees: <br>
+   *                                 <code>
+   *                                 360 / (angleGearRatio * encoderTicksPerRotation)
+   *                                 </code><br>
+   *                                 <p><br>
+   *                                 Meters:<br>
+   *                                 <code>
+   *                                 (Math.PI * wheelDiameter) / (driveGearRatio * encoderTicksPerRotation)
+   *                                 </code>
    */
   @Override
   public void configureIntegratedEncoder(double positionConversionFactor)
   {
     this.positionConversionFactor = positionConversionFactor;
-    motor.configSelectedFeedbackCoefficient(positionConversionFactor);
+    // Taken from democat's library.
+    // https://github.com/democat3457/swerve-lib/blob/7c03126b8c22f23a501b2c2742f9d173a5bcbc40/src/main/java/com/swervedrivespecialties/swervelib/ctre/Falcon500DriveControllerFactoryBuilder.java#L16
+    configureCANStatusFrames(250);
+  }
+
+  /**
+   * Set the CAN status frames.
+   *
+   * @param CANStatus1 Applied Motor Output, Fault Information, Limit Switch Information
+   */
+  public void configureCANStatusFrames(int CANStatus1)
+  {
+    motor.setStatusFramePeriod(StatusFrameEnhanced.Status_1_General, CANStatus1);
+  }
+
+  /**
+   * Set the CAN status frames.
+   *
+   * @param CANStatus1       Applied Motor Output, Fault Information, Limit Switch Information
+   * @param CANStatus2       Selected Sensor Position (PID 0), Selected Sensor Velocity (PID 0), Brushed Supply Current
+   *                         Measurement, Sticky Fault Information
+   * @param CANStatus3       Quadrature Information
+   * @param CANStatus4       Analog Input, Supply Battery Voltage, Controller Temperature
+   * @param CANStatus8       Pulse Width Information
+   * @param CANStatus10      Motion Profiling/Motion Magic Information
+   * @param CANStatus12      Selected Sensor Position (Aux PID 1), Selected Sensor Velocity (Aux PID 1)
+   * @param CANStatus13      PID0 (Primary PID) Information
+   * @param CANStatus14      PID1 (Auxiliary PID) Information
+   * @param CANStatus21      Integrated Sensor Position (Talon FX), Integrated Sensor Velocity (Talon FX)
+   * @param CANStatusCurrent Brushless Supply Current Measurement, Brushless Stator Current Measurement
+   */
+  public void configureCANStatusFrames(int CANStatus1, int CANStatus2, int CANStatus3, int CANStatus4, int CANStatus8,
+                                       int CANStatus10, int CANStatus12, int CANStatus13, int CANStatus14,
+                                       int CANStatus21, int CANStatusCurrent)
+  {
+    motor.setStatusFramePeriod(StatusFrameEnhanced.Status_1_General, CANStatus1);
+    motor.setStatusFramePeriod(StatusFrameEnhanced.Status_2_Feedback0, CANStatus2);
+    motor.setStatusFramePeriod(StatusFrameEnhanced.Status_3_Quadrature, CANStatus3);
+    motor.setStatusFramePeriod(StatusFrameEnhanced.Status_4_AinTempVbat, CANStatus4);
+    motor.setStatusFramePeriod(StatusFrameEnhanced.Status_8_PulseWidth, CANStatus8);
+    motor.setStatusFramePeriod(StatusFrameEnhanced.Status_10_Targets, CANStatus10);
+    motor.setStatusFramePeriod(StatusFrameEnhanced.Status_12_Feedback1, CANStatus12);
+    motor.setStatusFramePeriod(StatusFrameEnhanced.Status_13_Base_PIDF0, CANStatus13);
+    motor.setStatusFramePeriod(StatusFrameEnhanced.Status_14_Turn_PIDF1, CANStatus14);
+    motor.setStatusFramePeriod(StatusFrameEnhanced.Status_21_FeedbackIntegrated, CANStatus21);
+    motor.setStatusFramePeriod(StatusFrameEnhanced.Status_Brushless_Current, CANStatusCurrent);
+
+    // TODO: Configure Status Frame 2 thru 21 if necessary
+    // https://v5.docs.ctr-electronics.com/en/stable/ch18_CommonAPI.html#setting-status-frame-periods
   }
 
   /**
@@ -121,13 +191,13 @@ public class TalonSRXSwerve extends SwerveMotor
   @Override
   public void configurePIDF(PIDFConfig config)
   {
-    int slotIdx = isDriveMotor ? CTRE_slotIdx.Velocity.ordinal() : CTRE_slotIdx.Turning.ordinal();
-    motor.config_kP(slotIdx, config.p);
-    motor.config_kI(slotIdx, config.i);
-    motor.config_kD(slotIdx, config.d);
-    motor.config_kF(slotIdx, config.f);
-    motor.config_IntegralZone(slotIdx, config.iz);
-    motor.configClosedLoopPeakOutput(slotIdx, config.output.max);
+    configuration.slot0.kP = config.p;
+    configuration.slot0.kI = config.i;
+    configuration.slot0.kD = config.d;
+    configuration.slot0.kF = config.f;
+    configuration.slot0.integralZone = config.iz;
+    configuration.slot0.closedLoopPeakOutput = config.output.max;
+    configChanged = true;
   }
 
   /**
@@ -170,7 +240,11 @@ public class TalonSRXSwerve extends SwerveMotor
   @Override
   public void burnFlash()
   {
-    // Do nothing
+    if (configChanged)
+    {
+      motor.configAllSettings(configuration, 250);
+      configChanged = false;
+    }
   }
 
   /**
@@ -185,6 +259,63 @@ public class TalonSRXSwerve extends SwerveMotor
   }
 
   /**
+   * Put an angle within the the 360 deg scope of a reference. For example, given a scope reference of 756 degrees,
+   * assumes the full scope is (720-1080), and places an angle of 22 degrees into it, returning 742 deg.
+   *
+   * @param scopeReference Current Angle (deg)
+   * @param newAngle       Target Angle (deg)
+   * @return Closest angle within scope (deg)
+   */
+  private double placeInAppropriate0To360Scope(double scopeReference, double newAngle)
+  {
+    double lowerBound;
+    double upperBound;
+    double lowerOffset = (scopeReference % 360);
+
+    // Create the interval from the reference angle.
+    if (lowerOffset >= 0)
+    {
+      lowerBound = scopeReference - lowerOffset;
+      upperBound = scopeReference + (360 - lowerOffset);
+    } else
+    {
+      upperBound = scopeReference - lowerOffset;
+      lowerBound = scopeReference - (360 + lowerOffset);
+    }
+    // Put the angle in the interval.
+    while (newAngle < lowerBound)
+    {
+      newAngle += 360;
+    }
+    while (newAngle > upperBound)
+    {
+      newAngle -= 360;
+    }
+    // Smooth the transition between interval boundaries.
+    if (newAngle - scopeReference > 180)
+    {
+      newAngle -= 360;
+    } else if (newAngle - scopeReference < -180)
+    {
+      newAngle += 360;
+    }
+    return newAngle;
+  }
+
+  /**
+   * Convert the setpoint into native sensor units.
+   *
+   * @param setpoint Setpoint to mutate. In meters per second or degrees.
+   * @return Setpoint as native sensor units. Encoder ticks per 100ms, or Encoder tick.
+   */
+  public double convertToNativeSensorUnits(double setpoint)
+  {
+    setpoint =
+        isDriveMotor ? setpoint * .1 : placeInAppropriate0To360Scope(getPosition(), setpoint);
+    return setpoint / positionConversionFactor;
+  }
+
+  /**
    * Set the closed loop PID controller reference point.
    *
    * @param setpoint    Setpoint in MPS or Angle in degrees.
@@ -193,26 +324,35 @@ public class TalonSRXSwerve extends SwerveMotor
   @Override
   public void setReference(double setpoint, double feedforward)
   {
-    motor.set(isDriveMotor ? ControlMode.Velocity : ControlMode.Position, isDriveMotor ? setpoint * .1 : setpoint,
-              DemandType.ArbitraryFeedForward,
-              feedforward);
+    if (SwerveDriveTelemetry.isSimulation)
+    {
+      PhysicsSim.getInstance().run();
+    }
+
+    burnFlash();
+
+    motor.set(
+        isDriveMotor ? ControlMode.Velocity : ControlMode.Position,
+        convertToNativeSensorUnits(setpoint),
+        DemandType.ArbitraryFeedForward,
+        feedforward / nominalVoltage);
   }
 
   /**
    * Get the velocity of the integrated encoder.
    *
-   * @return velocity
+   * @return velocity in Meters Per Second, or Degrees per Second.
    */
   @Override
   public double getVelocity()
   {
-    return motor.getSelectedSensorVelocity() * (10 * positionConversionFactor);
+    return (motor.getSelectedSensorVelocity() * 10) * positionConversionFactor;
   }
 
   /**
    * Get the position of the integrated encoder.
    *
-   * @return Position
+   * @return Position in Meters or Degrees.
    */
   @Override
   public double getPosition()
@@ -223,14 +363,15 @@ public class TalonSRXSwerve extends SwerveMotor
   /**
    * Set the integrated encoder position.
    *
-   * @param position Integrated encoder position. Should be angle in degrees or meters per second.
+   * @param position Integrated encoder position. Should be angle in degrees or meters.
    */
   @Override
   public void setPosition(double position)
   {
-    if (!absoluteEncoder)
+    if (!absoluteEncoder && !SwerveDriveTelemetry.isSimulation)
     {
-      motor.setSelectedSensorPosition(position * positionConversionFactor);
+      position = position < 0 ? (position % 360) + 360 : position; // Fixes initial 360 movement.
+      motor.setSelectedSensorPosition(position / positionConversionFactor, 0, 250);
     }
   }
 
@@ -242,8 +383,9 @@ public class TalonSRXSwerve extends SwerveMotor
   @Override
   public void setVoltageCompensation(double nominalVoltage)
   {
-    motor.enableVoltageCompensation(true);
-    motor.configVoltageCompSaturation(nominalVoltage);
+    configuration.voltageCompSaturation = nominalVoltage;
+    configChanged = true;
+    this.nominalVoltage = nominalVoltage;
   }
 
   /**
@@ -255,11 +397,9 @@ public class TalonSRXSwerve extends SwerveMotor
   @Override
   public void setCurrentLimit(int currentLimit)
   {
-    SupplyCurrentLimitConfiguration config = new SupplyCurrentLimitConfiguration();
-    motor.configSupplyCurrentLimit(config);
-    config.currentLimit = currentLimit;
-    config.enable = true;
-    motor.configSupplyCurrentLimit(config);
+    configuration.continuousCurrentLimit = currentLimit;
+    configuration.peakCurrentLimit = currentLimit;
+    configChanged = true;
   }
 
   /**
@@ -270,8 +410,9 @@ public class TalonSRXSwerve extends SwerveMotor
   @Override
   public void setLoopRampRate(double rampRate)
   {
-    motor.configClosedloopRamp(rampRate);
-    motor.configOpenloopRamp(rampRate);
+    configuration.closedloopRamp = rampRate;
+    configuration.openloopRamp = rampRate;
+    configChanged = true;
   }
 
   /**
@@ -294,66 +435,5 @@ public class TalonSRXSwerve extends SwerveMotor
   public boolean isAttachedAbsoluteEncoder()
   {
     return absoluteEncoder;
-  }
-
-  /**
-   * The Talon SRX Slot profile used to configure the motor to use for the PID.
-   */
-  enum CTRE_slotIdx
-  {
-    /**
-     * Slot 0, meant for distances PID's.
-     */
-    Distance,
-    /**
-     * Slot 1, meant for turning PID's.
-     */
-    Turning,
-    /**
-     * Slot 2, meant for velocity PID's.
-     */
-    Velocity,
-    /**
-     * Slot 3, meant for motion profiles.
-     */
-    MotionProfile
-  }
-
-  /**
-   * The Talon PID to use onboard.
-   */
-  enum CTRE_pidIdx
-  {
-    /**
-     * Primary PID for talons.
-     */
-    PRIMARY_PID,
-    /**
-     * Secondary PID for talons.
-     */
-    AUXILIARY_PID,
-    /**
-     * Third PID slot for talons.
-     */
-    THIRD_PID,
-    /**
-     * Fourth PID slot for talons.
-     */
-    FOURTH_PID
-  }
-
-  /**
-   * The remote sensor.
-   */
-  enum CTRE_remoteSensor
-  {
-    /**
-     * Remote sensor 0.
-     */
-    REMOTE_SENSOR_0,
-    /**
-     * Remote sensor 1.
-     */
-    REMOTE_SENSOR_1
   }
 }

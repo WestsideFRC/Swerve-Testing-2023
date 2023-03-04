@@ -1,11 +1,8 @@
 package swervelib.parser.json;
 
 import edu.wpi.first.math.util.Units;
-import swervelib.encoders.CANCoderSwerve;
 import swervelib.encoders.SwerveAbsoluteEncoder;
 import swervelib.motors.SwerveMotor;
-import swervelib.motors.TalonFXSwerve;
-import swervelib.motors.TalonSRXSwerve;
 import swervelib.parser.PIDFConfig;
 import swervelib.parser.SwerveModuleConfiguration;
 import swervelib.parser.SwerveModulePhysicalCharacteristics;
@@ -41,7 +38,15 @@ public class ModuleJson
   /**
    * Absolute encoder inversion state.
    */
-  public boolean       absoluteEncoderInverted = false;
+  public boolean       absoluteEncoderInverted        = false;
+  /**
+   * The angle encoder pulse per revolution override. 1 for Neo encoder. 2048 for Falcons.
+   */
+  public double        angleEncoderPulsePerRevolution = 0;
+  /**
+   * Angle motor free speed RPM.
+   */
+  public double        angleMotorFreeSpeedRPM         = 0;
   /**
    * The location of the swerve module from the center of the robot in inches.
    */
@@ -56,9 +61,11 @@ public class ModuleJson
    * @param physicalCharacteristics Physical characteristics of the swerve module.
    * @return {@link SwerveModuleConfiguration} based on the provided data and parsed data.
    */
-  public SwerveModuleConfiguration createModuleConfiguration(PIDFConfig anglePIDF, PIDFConfig velocityPIDF,
-                                                             double maxSpeed,
-                                                             SwerveModulePhysicalCharacteristics physicalCharacteristics)
+  public SwerveModuleConfiguration createModuleConfiguration(
+      PIDFConfig anglePIDF,
+      PIDFConfig velocityPIDF,
+      double maxSpeed,
+      SwerveModulePhysicalCharacteristics physicalCharacteristics)
   {
     SwerveMotor           angleMotor = angle.createMotor(false);
     SwerveAbsoluteEncoder absEncoder = encoder.createEncoder();
@@ -68,16 +75,24 @@ public class ModuleJson
     {
       absEncoder = angle.createIntegratedEncoder(angleMotor);
       angleMotor.setAbsoluteEncoder(absEncoder);
-    } else if ((angleMotor instanceof TalonFXSwerve || angleMotor instanceof TalonSRXSwerve) &&
-               absEncoder instanceof CANCoderSwerve)
-    {
-      angleMotor.setAbsoluteEncoder(absEncoder);
     }
 
-    return new SwerveModuleConfiguration(drive.createMotor(true), angleMotor, absEncoder,
-                                         absoluteEncoderOffset, Units.inchesToMeters(location.x),
-                                         Units.inchesToMeters(location.y), anglePIDF, velocityPIDF, maxSpeed,
-                                         physicalCharacteristics, absoluteEncoderInverted, inverted.drive,
-                                         inverted.angle);
+    return new SwerveModuleConfiguration(
+        drive.createMotor(true),
+        angleMotor,
+        absEncoder,
+        absoluteEncoderOffset,
+        Units.inchesToMeters(location.x),
+        Units.inchesToMeters(location.y),
+        anglePIDF,
+        velocityPIDF,
+        maxSpeed,
+        physicalCharacteristics,
+        absoluteEncoderInverted,
+        inverted.drive,
+        inverted.angle,
+        angleEncoderPulsePerRevolution == 0 ? physicalCharacteristics.angleEncoderPulsePerRotation
+                                            : angleEncoderPulsePerRevolution,
+        angleMotorFreeSpeedRPM == 0 ? physicalCharacteristics.angleMotorFreeSpeedRPM : angleMotorFreeSpeedRPM);
   }
 }
